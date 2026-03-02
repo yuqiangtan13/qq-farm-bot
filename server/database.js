@@ -109,6 +109,9 @@ async function initDatabase() {
             farm_interval INTEGER DEFAULT 10000,
             friend_interval INTEGER DEFAULT 10000,
             auto_start INTEGER DEFAULT 0,
+            feature_toggles TEXT DEFAULT '',
+            daily_stats TEXT DEFAULT '',
+            daily_reward_state TEXT DEFAULT '',
             last_login_at TEXT,
             created_at TEXT DEFAULT (datetime('now','localtime')),
             updated_at TEXT DEFAULT (datetime('now','localtime'))
@@ -176,6 +179,11 @@ async function initDatabase() {
 
     // 迁移: 添加 preferred_seed_id 列
     try { db.run(`ALTER TABLE users ADD COLUMN preferred_seed_id INTEGER DEFAULT 0`); } catch (e) { /* 列已存在 */ }
+
+    // 迁移: 添加持久化配置与统计列
+    try { db.run(`ALTER TABLE users ADD COLUMN feature_toggles TEXT DEFAULT ''`); } catch (e) { }
+    try { db.run(`ALTER TABLE users ADD COLUMN daily_stats TEXT DEFAULT ''`); } catch (e) { }
+    try { db.run(`ALTER TABLE users ADD COLUMN daily_reward_state TEXT DEFAULT ''`); } catch (e) { }
 
     saveToFile();
 

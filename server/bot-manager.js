@@ -163,7 +163,19 @@ class BotManager extends EventEmitter {
                     // 保存 session 并启动 bot
                     db.saveSession(uin, code);
                     db.updateUser(uin, { last_login_at: new Date().toISOString() });
-                    await this._startBot(uin, code, session);
+
+                    // 重新登录时尝试读取已有配置与统计
+                    const user = db.getUserByUin(uin);
+                    const startOpts = { ...session };
+                    if (user) {
+                        if (user.feature_toggles) startOpts.featureToggles = JSON.parse(user.feature_toggles);
+                        if (user.daily_stats) startOpts.dailyStats = JSON.parse(user.daily_stats);
+                        if (user.daily_reward_state) startOpts.dailyRewardState = JSON.parse(user.daily_reward_state);
+                        startOpts.preferredSeedId = user.preferred_seed_id || 0;
+                        if (user.farm_interval) startOpts.farmInterval = user.farm_interval;
+                        if (user.friend_interval) startOpts.friendInterval = user.friend_interval;
+                    }
+                    await this._startBot(uin, code, startOpts);
                     return;
                 }
                 if (result.status === 'Used') {
@@ -216,6 +228,9 @@ class BotManager extends EventEmitter {
             farmInterval: opts.farmInterval || CONFIG.farmCheckInterval,
             friendInterval: opts.friendInterval || CONFIG.friendCheckInterval,
             preferredSeedId: opts.preferredSeedId || 0,
+            featureToggles: opts.featureToggles || null,
+            dailyStats: opts.dailyStats || null,
+            dailyRewardState: opts.dailyRewardState || null,
         });
 
         // 监听事件并转发给 BotManager 的事件总线
@@ -240,6 +255,18 @@ class BotManager extends EventEmitter {
                 exp: data.userState.exp,
             });
             this.emit('botStateUpdate', data);
+        });
+
+        bot.on('settingsUpdate', (data) => {
+            db.updateUser(uin, { feature_toggles: JSON.stringify(data.featureToggles) });
+        });
+
+        bot.on('statsUpdate', (data) => {
+            db.updateUser(uin, { daily_stats: JSON.stringify(data.dailyStats) });
+        });
+
+        bot.on('rewardStateUpdate', (data) => {
+            db.updateUser(uin, { daily_reward_state: JSON.stringify(data.dailyRewardState) });
         });
 
         this.bots.set(uin, bot);
@@ -275,6 +302,9 @@ class BotManager extends EventEmitter {
             farmInterval: user?.farm_interval || 10000,
             friendInterval: user?.friend_interval || 10000,
             preferredSeedId: user?.preferred_seed_id || 0,
+            featureToggles: user?.feature_toggles ? JSON.parse(user.feature_toggles) : null,
+            dailyStats: user?.daily_stats ? JSON.parse(user.daily_stats) : null,
+            dailyRewardState: user?.daily_reward_state ? JSON.parse(user.daily_reward_state) : null,
         });
     }
 
@@ -337,6 +367,9 @@ class BotManager extends EventEmitter {
                         farmInterval: user.farm_interval,
                         friendInterval: user.friend_interval,
                         preferredSeedId: user.preferred_seed_id || 0,
+                        featureToggles: user.feature_toggles ? JSON.parse(user.feature_toggles) : null,
+                        dailyStats: user.daily_stats ? JSON.parse(user.daily_stats) : null,
+                        dailyRewardState: user.daily_reward_state ? JSON.parse(user.daily_reward_state) : null,
                     });
                     console.log(`[BotManager] 已启动: ${user.uin} (${user.nickname || '未知'})`);
                 }

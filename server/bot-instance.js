@@ -166,6 +166,10 @@ class BotInstance extends EventEmitter {
             autoFertilizerUse: false,   // 使用化肥礼包
         };
 
+        if (opts.featureToggles) {
+            Object.assign(this.featureToggles, opts.featureToggles);
+        }
+
         // ---------- 今日统计 ----------
         this.dailyStats = {
             date: new Date().toLocaleDateString(),
@@ -177,6 +181,17 @@ class BotInstance extends EventEmitter {
             helpPest: 0,
             sellGold: 0,
         };
+
+        if (opts.dailyStats) {
+            const today = new Date().toLocaleDateString();
+            if (opts.dailyStats.date === today) {
+                Object.assign(this.dailyStats, opts.dailyStats);
+            }
+        }
+
+        if (opts.dailyRewardState) {
+            Object.assign(this.dailyRewardState, opts.dailyRewardState);
+        }
 
         // ---------- 缓存的土地数据 ----------
         this._cachedLands = null;
@@ -375,6 +390,7 @@ class BotInstance extends EventEmitter {
                             if (count > oldExp) {
                                 this._checkDailyReset();
                                 this.dailyStats.expGained += (count - oldExp);
+                                this.emit('statsUpdate', { userId: this.userId, dailyStats: this.dailyStats });
                             }
                             this.userState.exp = count;
                         }
@@ -399,6 +415,7 @@ class BotInstance extends EventEmitter {
                             if (exp > oldExp) {
                                 this._checkDailyReset();
                                 this.dailyStats.expGained += (exp - oldExp);
+                                this.emit('statsUpdate', { userId: this.userId, dailyStats: this.dailyStats });
                             }
                             this.userState.exp = exp;
                         }
@@ -1525,6 +1542,7 @@ class BotInstance extends EventEmitter {
 
     _markDoneToday(key) {
         this.dailyRewardState[key] = this._getDateKey();
+        this.emit('rewardStateUpdate', { userId: this.userId, dailyRewardState: this.dailyRewardState });
     }
 
     _getRewardSummary(items) {
@@ -2310,6 +2328,7 @@ class BotInstance extends EventEmitter {
     setFeatureToggles(toggles) {
         Object.assign(this.featureToggles, toggles);
         this.log('配置', `功能开关已更新: ${JSON.stringify(toggles)}`);
+        this.emit('settingsUpdate', { userId: this.userId, featureToggles: this.featureToggles });
     }
 
     /** 设置指定种植作物 */
@@ -2328,6 +2347,7 @@ class BotInstance extends EventEmitter {
                 expGained: 0, harvestCount: 0, stealCount: 0,
                 helpWater: 0, helpWeed: 0, helpPest: 0, sellGold: 0,
             };
+            this.emit('statsUpdate', { userId: this.userId, dailyStats: this.dailyStats });
         }
     }
 

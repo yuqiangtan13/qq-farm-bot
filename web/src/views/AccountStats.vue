@@ -11,7 +11,7 @@
 
     <!-- 顶部数据卡片 -->
     <el-row :gutter="20" class="summary-cards">
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="info">
@@ -24,7 +24,7 @@
           </div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="info">
@@ -37,7 +37,7 @@
           </div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="info">
@@ -50,7 +50,7 @@
           </div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="info">
@@ -67,7 +67,7 @@
 
     <!-- 图表区 -->
     <el-row :gutter="20" class="charts-row">
-      <el-col :span="16">
+      <el-col :xs="24" :lg="16" class="responsive-col">
         <el-card shadow="never" class="chart-card">
           <template #header>
             <div class="card-title">收益趋势图</div>
@@ -75,7 +75,7 @@
           <v-chart class="trend-chart" :option="trendChartOption" autoresize />
         </el-card>
       </el-col>
-      <el-col :span="8">
+      <el-col :xs="24" :lg="8" class="responsive-col">
         <el-card shadow="never" class="chart-card">
           <template #header>
             <div class="card-title">作物收益占比 (Top 排行)</div>
@@ -88,7 +88,7 @@
     <!-- 排行榜与分时明细区 -->
     <el-row :gutter="20" class="data-row">
       <!-- 偷菜排行榜 -->
-      <el-col :span="8">
+      <el-col :xs="24" :lg="8" class="responsive-col">
         <el-card shadow="never" class="table-card rank-card">
           <template #header>
             <div class="card-title" style="color: #f56c6c;">
@@ -113,7 +113,7 @@
       </el-col>
 
       <!-- 详细数据表格 -->
-      <el-col :span="16">
+      <el-col :xs="24" :lg="16" class="responsive-col">
         <el-card shadow="never" class="table-card">
           <template #header>
             <div class="card-title">分时详细记录</div>
@@ -128,7 +128,7 @@
             <el-table-column label="自己收菜" align="center">
               <el-table-column prop="harvest.amount" label="数量" width="80" align="center">
                 <template #default="scope">
-                  <el-popover v-if="scope.row.harvest.details && scope.row.harvest.details.length" placement="top" title="获得作物" width="220" trigger="hover" effect="dark">
+                  <el-popover v-if="scope.row.harvest.details && scope.row.harvest.details.length" placement="top" title="获得作物" :width="mobileWidth" trigger="hover">
                     <template #reference>
                       <span class="hover-number text-success">{{ scope.row.harvest.amount }}</span>
                     </template>
@@ -151,7 +151,7 @@
             <el-table-column label="外头偷菜" align="center">
               <el-table-column prop="steal.amount" label="数量" width="80" align="center">
                 <template #default="scope">
-                  <el-popover v-if="scope.row.steal.details && scope.row.steal.details.length" placement="top" title="战利品" width="220" trigger="hover" effect="dark">
+                  <el-popover v-if="scope.row.steal.details && scope.row.steal.details.length" placement="top" title="战利品" :width="mobileWidth" trigger="hover">
                     <template #reference>
                       <span class="hover-number text-danger">{{ scope.row.steal.amount }}</span>
                     </template>
@@ -212,6 +212,11 @@ async function fetchData() {
     loading.value = false
   }
 }
+
+// 响应式属性
+const mobileWidth = computed(() => {
+  return window.innerWidth <= 768 ? 280 : 250;
+})
 
 // 格式化函数
 function formatTime(hourStr) {
@@ -540,23 +545,70 @@ watch(() => props.uin, () => {
   justify-content: space-between;
   align-items: center;
   padding: 6px 0;
-  border-bottom: 1px solid #4c4c4c;
+  border-bottom: 1px solid #ebeef5;
+  gap: 12px;
 }
 .popover-item:last-child {
   border-bottom: none;
 }
 .crop-name {
-  color: #e5eaf3;
+  color: #ff0000;
+  flex: 1;
+  word-wrap: break-word;
+  white-space: normal;
 }
 .crop-gold {
   color: #e6a23c;
   font-family: monospace;
   font-weight: bold;
+  white-space: nowrap;
 }
 
 :deep(.el-table) {
   --el-table-header-bg-color: #f7f9fc;
   border-radius: 8px;
   overflow: hidden;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .account-stats-modern {
+    padding: 12px;
+  }
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .summary-cards .el-col {
+    margin-bottom: 12px;
+  }
+  .stat-card {
+    border-radius: 12px;
+  }
+  .info .label {
+    font-size: 13px;
+  }
+  .info .value {
+    font-size: 20px;
+  }
+  .icon-wrap {
+    width: 44px;
+    height: 44px;
+    font-size: 22px;
+    border-radius: 12px;
+  }
+  .responsive-col {
+    margin-bottom: 16px;
+  }
+  .trend-chart, .pie-chart {
+    height: 250px;
+  }
+  .rank-badge {
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    font-size: 12px;
+  }
 }
 </style>
