@@ -981,6 +981,8 @@ class BotInstance extends EventEmitter {
                     if (reply.items && reply.items.length > 0) {
                         for (const item of reply.items) {
                             const itemId = toNum(item.id);
+                            // 过滤金币、经验等非作物掉落
+                            if (itemId === 1 || itemId === 1001 || itemId === 2 || itemId === 1101) continue;
                             const name = getFruitName(itemId) || `未知果实(${item.id})`;
                             const count = toNum(item.count);
                             const itemInfo = getItemInfo(itemId);
@@ -1379,6 +1381,8 @@ class BotInstance extends EventEmitter {
                 if (totalStolenItems.length > 0) {
                     for (const item of totalStolenItems) {
                         const itemId = toNum(item.id);
+                        // 过滤金币、经验等非作物掉落
+                        if (itemId === 1 || itemId === 1001 || itemId === 2 || itemId === 1101) continue;
                         const name = getFruitName(itemId) || `未知果实(${item.id})`;
                         const count = toNum(item.count);
                         const itemInfo = getItemInfo(itemId);
