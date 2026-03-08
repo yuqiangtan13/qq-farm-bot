@@ -406,7 +406,8 @@ class BotManager extends EventEmitter {
             try {
                 const code = db.getSession(user.uin);
                 if (code) {
-                    await this._startBot(user.uin, code, {
+                    // 不使用 await 阻塞，防单个账号登录超时导致整个 Web 服务器挂起
+                    this._startBot(user.uin, code, {
                         platform: user.platform,
                         farmInterval: user.farm_interval,
                         friendInterval: user.friend_interval,
@@ -414,11 +415,14 @@ class BotManager extends EventEmitter {
                         featureToggles: user.feature_toggles ? JSON.parse(user.feature_toggles) : null,
                         dailyStats: user.daily_stats ? JSON.parse(user.daily_stats) : null,
                         dailyRewardState: user.daily_reward_state ? JSON.parse(user.daily_reward_state) : null,
+                    }).then(() => {
+                        console.log(`[BotManager] 已启动: ${user.uin} (${user.nickname || '未知'})`);
+                    }).catch(startErr => {
+                        console.error(`[BotManager] Bot 启动实例失败 ${user.uin}: ${startErr.message}`);
                     });
-                    console.log(`[BotManager] 已启动: ${user.uin} (${user.nickname || '未知'})`);
                 }
             } catch (err) {
-                console.error(`[BotManager] 自动启动失败 ${user.uin}: ${err.message}`);
+                console.error(`[BotManager] 自动启动循环异常 ${user.uin}: ${err.message}`);
             }
         }
     }

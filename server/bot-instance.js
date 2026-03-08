@@ -22,6 +22,7 @@ const {
     getPlantRanking, getItemInfo, getPlantById
 } = require('../src/gameConfig');
 const db = require('./database');
+const cryptoWasm = require('./utils/crypto-wasm');
 
 const seedShopData = require('../tools/seed-shop-merged-export.json');
 const FRUIT_ID_SET = new Set(
@@ -306,7 +307,11 @@ class BotInstance extends EventEmitter {
     //  网络层
     // ================================================================
 
-    encodeMsg(serviceName, methodName, bodyBytes) {
+    async encodeMsg(serviceName, methodName, bodyBytes) {
+        let finalBody = bodyBytes || Buffer.alloc(0);
+        if (finalBody.length > 0) {
+            finalBody = await cryptoWasm.encryptBuffer(finalBody);
+        }
         const msg = types.GateMessage.create({
             meta: {
                 service_name: serviceName,
@@ -315,21 +320,35 @@ class BotInstance extends EventEmitter {
                 client_seq: toLong(this.clientSeq),
                 server_seq: toLong(this.serverSeq),
             },
-            body: bodyBytes || Buffer.alloc(0),
+            body: finalBody,
         });
         const encoded = types.GateMessage.encode(msg).finish();
         this.clientSeq++;
         return encoded;
     }
 
-    sendMsg(serviceName, methodName, bodyBytes, callback) {
+    async sendMsg(serviceName, methodName, bodyBytes, callback) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             this.log('WS', '连接未打开');
+            if (callback) callback(new Error('连接未打开'));
             return false;
         }
         const seq = this.clientSeq;
-        const encoded = this.encodeMsg(serviceName, methodName, bodyBytes);
+        let encoded;
+        try {
+            encoded = await this.encodeMsg(serviceName, methodName, bodyBytes);
+        } catch (err) {
+            if (callback) callback(err);
+            return false;
+        }
         if (callback) this.pendingCallbacks.set(seq, callback);
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            if (callback) {
+                this.pendingCallbacks.delete(seq);
+                callback(new Error('连接已在加密途中关闭'));
+            }
+            return false;
+        }
         this.ws.send(encoded);
         return true;
     }
@@ -346,24 +365,36 @@ class BotInstance extends EventEmitter {
                 reject(new Error(`请求超时: ${methodName} (seq=${seq})`));
             }, timeout);
 
-            const sent = this.sendMsg(serviceName, methodName, bodyBytes, (err, body, meta) => {
+            this.sendMsg(serviceName, methodName, bodyBytes, (err, body, meta) => {
                 clearTimeout(timer);
                 if (err) reject(err);
                 else resolve({ body, meta });
-            });
-            if (!sent) {
+            }).then(sent => {
+                if (!sent) {
+                    clearTimeout(timer);
+                    reject(new Error(`发送失败: ${methodName}`));
+                }
+            }).catch(err => {
                 clearTimeout(timer);
-                reject(new Error(`发送失败: ${methodName}`));
-            }
+                reject(err);
+            });
         });
     }
 
-    handleMessage(data) {
+    async handleMessage(data) {
         try {
             const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-            const msg = types.GateMessage.decode(buf);
+            let msg;
+            try {
+                msg = types.GateMessage.decode(buf);
+            } catch (err) {
+                this.logWarn('解码', `外层 GateMessage 解码失败: ${err.message}`);
+                return;
+            }
+
             const meta = msg.meta;
             if (!meta) return;
+
             if (meta.server_seq) {
                 const seq = toNum(meta.server_seq);
                 if (seq > this.serverSeq) this.serverSeq = seq;
@@ -371,7 +402,14 @@ class BotInstance extends EventEmitter {
             const msgType = meta.message_type;
 
             // Notify
-            if (msgType === 3) { this.handleNotify(msg); return; }
+            if (msgType === 3) {
+                try {
+                    this.handleNotify(msg);
+                } catch (e) {
+                    this.logWarn('推送', `Notify 解码失败: ${e.message}`);
+                }
+                return;
+            }
 
             // Response
             if (msgType === 2) {
@@ -398,105 +436,107 @@ class BotInstance extends EventEmitter {
 
     handleNotify(msg) {
         if (!msg.body || msg.body.length === 0) return;
+        let event;
         try {
-            const event = types.EventMessage.decode(msg.body);
-            const type = event.message_type || '';
-            const eventBody = event.body;
+            event = types.EventMessage.decode(msg.body);
+        } catch (e) {
+            throw e;
+        }
 
-            if (type.includes('Kickout')) {
-                this.log('推送', `被踢下线! ${type}`);
-                try {
-                    const notify = types.KickoutNotify.decode(eventBody);
-                    this.log('推送', `原因: ${notify.reason_message || '未知'}`);
-                } catch (e) { }
-                this._setStatus('error');
-                this.errorMessage = '被踢下线';
-                this.stop();
-                return;
-            }
+        const type = event.message_type || '';
+        const eventBody = event.body;
 
-            if (type.includes('LandsNotify')) {
-                try {
-                    const notify = types.LandsNotify.decode(eventBody);
-                    const hostGid = toNum(notify.host_gid);
-                    const lands = notify.lands || [];
-                    if (lands.length > 0 && (hostGid === this.userState.gid || hostGid === 0)) {
-                        this.emit('landsChanged', lands);
-                    }
-                } catch (e) { }
-                return;
-            }
+        if (type.includes('Kickout')) {
+            this.log('推送', `被踢下线! ${type}`);
+            try {
+                const notify = types.KickoutNotify.decode(eventBody);
+                this.log('推送', `原因: ${notify.reason_message || '未知'}`);
+            } catch (e) { }
+            this._setStatus('error');
+            this.errorMessage = '被踢下线';
+            this.stop();
+            return;
+        }
 
-            if (type.includes('ItemNotify')) {
-                try {
-                    const notify = types.ItemNotify.decode(eventBody);
-                    const items = notify.items || [];
-                    for (const itemChg of items) {
-                        const item = itemChg.item;
-                        if (!item) continue;
-                        const id = toNum(item.id);
-                        const count = toNum(item.count);
-                        if (id === 1101 || id === 2) {
-                            const oldExp = this.userState.exp || 0;
-                            if (count > oldExp) {
-                                this._checkDailyReset();
-                                this.dailyStats.expGained += (count - oldExp);
-                                this.emit('statsUpdate', { userId: this.userId, dailyStats: this.dailyStats });
-                            }
-                            this.userState.exp = count;
+        if (type.includes('LandsNotify')) {
+            try {
+                const notify = types.LandsNotify.decode(eventBody);
+                const hostGid = toNum(notify.host_gid);
+                const lands = notify.lands || [];
+                if (lands.length > 0 && (hostGid === this.userState.gid || hostGid === 0)) {
+                    this.emit('landsChanged', lands);
+                }
+            } catch (e) { }
+            return;
+        }
+
+        if (type.includes('ItemNotify')) {
+            try {
+                const notify = types.ItemNotify.decode(eventBody);
+                const items = notify.items || [];
+                for (const itemChg of items) {
+                    const item = itemChg.item;
+                    if (!item) continue;
+                    const id = toNum(item.id);
+                    const count = toNum(item.count);
+                    if (id === 1101 || id === 2) {
+                        const oldExp = this.userState.exp || 0;
+                        if (count > oldExp) {
+                            this._checkDailyReset();
+                            this.dailyStats.expGained += (count - oldExp);
+                            this.emit('statsUpdate', { userId: this.userId, dailyStats: this.dailyStats });
                         }
-                        else if (id === 1 || id === 1001) { this.userState.gold = count; }
+                        this.userState.exp = count;
+                    }
+                    else if (id === 1 || id === 1001) { this.userState.gold = count; }
+                }
+                this._emitStateUpdate();
+            } catch (e) { }
+            return;
+        }
+
+        if (type.includes('BasicNotify')) {
+            try {
+                const notify = types.BasicNotify.decode(eventBody);
+                if (notify.basic) {
+                    const oldLevel = this.userState.level;
+                    this.userState.level = toNum(notify.basic.level) || this.userState.level;
+                    this.userState.gold = toNum(notify.basic.gold) || this.userState.gold;
+                    const exp = toNum(notify.basic.exp);
+                    if (exp > 0) {
+                        const oldExp = this.userState.exp || 0;
+                        // 仅当 exp 确实比当前值大时才计入（避免和 ItemNotify 重复）
+                        if (exp > oldExp) {
+                            this._checkDailyReset();
+                            this.dailyStats.expGained += (exp - oldExp);
+                            this.emit('statsUpdate', { userId: this.userId, dailyStats: this.dailyStats });
+                        }
+                        this.userState.exp = exp;
+                    }
+                    if (this.userState.level !== oldLevel) {
+                        this.log('系统', `🎉 升级! Lv${oldLevel} → Lv${this.userState.level}`);
                     }
                     this._emitStateUpdate();
-                } catch (e) { }
-                return;
-            }
+                }
+            } catch (e) { }
+            return;
+        }
 
-            if (type.includes('BasicNotify')) {
-                try {
-                    const notify = types.BasicNotify.decode(eventBody);
-                    if (notify.basic) {
-                        const oldLevel = this.userState.level;
-                        this.userState.level = toNum(notify.basic.level) || this.userState.level;
-                        this.userState.gold = toNum(notify.basic.gold) || this.userState.gold;
-                        const exp = toNum(notify.basic.exp);
-                        if (exp > 0) {
-                            const oldExp = this.userState.exp || 0;
-                            // 仅当 exp 确实比当前值大时才计入（避免和 ItemNotify 重复）
-                            if (exp > oldExp) {
-                                this._checkDailyReset();
-                                this.dailyStats.expGained += (exp - oldExp);
-                                this.emit('statsUpdate', { userId: this.userId, dailyStats: this.dailyStats });
-                            }
-                            this.userState.exp = exp;
-                        }
-                        if (this.userState.level !== oldLevel) {
-                            this.log('系统', `🎉 升级! Lv${oldLevel} → Lv${this.userState.level}`);
-                        }
-                        this._emitStateUpdate();
-                    }
-                } catch (e) { }
-                return;
-            }
+        if (type.includes('FriendApplicationReceivedNotify')) {
+            try {
+                const notify = types.FriendApplicationReceivedNotify.decode(eventBody);
+                const applications = notify.applications || [];
+                if (applications.length > 0) this._handleFriendApplications(applications);
+            } catch (e) { }
+            return;
+        }
 
-            if (type.includes('FriendApplicationReceivedNotify')) {
-                try {
-                    const notify = types.FriendApplicationReceivedNotify.decode(eventBody);
-                    const applications = notify.applications || [];
-                    if (applications.length > 0) this._handleFriendApplications(applications);
-                } catch (e) { }
-                return;
-            }
-
-            if (type.includes('TaskInfoNotify')) {
-                try {
-                    const notify = types.TaskInfoNotify.decode(eventBody);
-                    if (notify.task_info) this._handleTaskNotify(notify.task_info);
-                } catch (e) { }
-                return;
-            }
-        } catch (e) {
-            this.logWarn('推送', `解码失败: ${e.message}`);
+        if (type.includes('TaskInfoNotify')) {
+            try {
+                const notify = types.TaskInfoNotify.decode(eventBody);
+                if (notify.task_info) this._handleTaskNotify(notify.task_info);
+            } catch (e) { }
+            return;
         }
     }
 
@@ -519,27 +559,28 @@ class BotInstance extends EventEmitter {
 
         this.sendMsg('gamepb.userpb.UserService', 'Login', body, (err, bodyBytes) => {
             if (err) { this.logError('登录', `登录失败: ${err.message}`); this._setStatus('error'); this.errorMessage = err.message; return; }
+            let reply;
             try {
-                const reply = types.LoginReply.decode(bodyBytes);
-                if (reply.basic) {
-                    this.userState.gid = toNum(reply.basic.gid);
-                    this.userState.name = reply.basic.name || '未知';
-                    this.userState.level = toNum(reply.basic.level);
-                    this.userState.gold = toNum(reply.basic.gold);
-                    this.userState.exp = toNum(reply.basic.exp);
-                    if (reply.time_now_millis) this.syncServerTime(toNum(reply.time_now_millis));
-
-                    this.log('登录', `登录成功 | 昵称: ${this.userState.name} | GID: ${this.userState.gid} | 等级: Lv${this.userState.level} | 金币: ${this.userState.gold.toLocaleString()} | 经验: ${this.userState.exp.toLocaleString()}`);
-                    this._setStatus('running');
-                    this._updateExtraUserInfo(true).catch(e => this.logWarn('系统', `初始获取额外信息失败: ${e.message}`));
-                    this._emitStateUpdate();
-                }
-                this.startHeartbeat();
-                if (onSuccess) onSuccess();
+                reply = types.LoginReply.decode(bodyBytes);
             } catch (e) {
                 this.logError('登录', `登录响应解码失败: ${e.message}`);
-                this._setStatus('error');
+                this._setStatus('error'); this.errorMessage = '解码失败'; return;
             }
+            if (reply.basic) {
+                this.userState.gid = toNum(reply.basic.gid);
+                this.userState.name = reply.basic.name || '未知';
+                this.userState.level = toNum(reply.basic.level);
+                this.userState.gold = toNum(reply.basic.gold);
+                this.userState.exp = toNum(reply.basic.exp);
+                if (reply.time_now_millis) this.syncServerTime(toNum(reply.time_now_millis));
+
+                this.log('登录', `登录成功 | 昵称: ${this.userState.name} | GID: ${this.userState.gid} | 等级: Lv${this.userState.level} | 金币: ${this.userState.gold.toLocaleString()} | 经验: ${this.userState.exp.toLocaleString()}`);
+                this._setStatus('running');
+                this._updateExtraUserInfo(true).catch(e => this.logWarn('系统', `初始获取额外信息失败: ${e.message}`));
+                this._emitStateUpdate();
+            }
+            this.startHeartbeat();
+            if (onSuccess) onSuccess();
         });
     }
 
@@ -616,11 +657,12 @@ class BotInstance extends EventEmitter {
 
             this.ws.on('close', (code, reason) => {
                 this.log('WS', `连接关闭 (code=${code})`);
-                if (this.status === 'running') {
+                if (this.status === 'running' || this.status === 'connecting') {
                     this._setStatus('error');
                     this.errorMessage = `连接关闭 code=${code}`;
                 }
                 this._cleanup();
+                reject(new Error(`连接关闭 code=${code}`));
             });
 
             this.ws.on('error', (err) => {
